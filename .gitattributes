@@ -1,0 +1,2 @@
+*.json filter=lfs diff=lfs merge=lfs -text
+rfp_data_with_local_embeddings.json filter=lfs diff=lfs merge=lfs -text
