@@ -21,7 +21,7 @@ function cosineSimilarity(a, b) {
 
 async function embedQuery(query) {
   try {
-    const res = await fetch("http://localhost:5500/embed", {
+    const res = await fetch("/.netlify/functions/embed", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ input: query, model: "text-embedding-3-small" })
@@ -133,7 +133,7 @@ function addMessage(role, text) {
 
 async function callGPTWithContext(query, matches) {
   try {
-    const res = await fetch("http://localhost:5500/ask", {
+    const res = await fetch("/.netlify/functions/proxy", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
