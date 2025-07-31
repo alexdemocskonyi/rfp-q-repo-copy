@@ -119,7 +119,8 @@ async function askAIChat(query) {
 }
 
 function addMessage(sender,text){
-  const msgBox=document.getElementById("chat-messages");
+const chatBox=document.getElementById("chat-history");
+if(chatBox){chatBox.style.maxHeight=(chatBox.scrollHeight>150?chatBox.scrollHeight:150)+"px";}  const msgBox=document.getElementById("chat-messages");
   msgBox.innerHTML += `<div><b>${sender}:</b> ${text}</div>`;
   msgBox.scrollTop=msgBox.scrollHeight;
 }
