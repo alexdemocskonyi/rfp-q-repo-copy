@@ -1,16 +1,12 @@
 let data = [];
-const resultsContainer = document.getElementById("results");
-const searchBox = document.getElementById("general-search");
-const fuseOptions = { includeScore: true, threshold: 0.4, keys: ["question"] };
 let fuse;
 
 async function loadData() {
   try {
-    console.log("🔄 Fetching dataset...");
-    const res = await fetch("rfp_data_with_local_embeddings.json?t=" + Date.now());
+    const res = await fetch('rfp_data_with_local_embeddings.json?t=1753920684');
     data = await res.json();
     console.log(`✅ Loaded ${data.length} records`);
-    fuse = new Fuse(data, fuseOptions);
+    fuse = new Fuse(data, { includeScore: true, threshold: 0.4, keys: ["question"] });
   } catch (err) {
     console.error("❌ Failed to load data:", err);
   }
@@ -33,110 +29,164 @@ async function embedQuery(query) {
     const json = await res.json();
     return json.data?.[0]?.embedding || null;
   } catch (err) {
-    console.warn("⚠️ AI embedding failed, skipping contextual matches.");
     return null;
   }
 }
 
-function renderGroup(title, results, query) {
-  if (!results.length) return "";
-  let html = `<h3>${title}</h3>`;
-  results.slice(0, 5).forEach(result => {
-    const answersPreview = result.answers.map(ans => {
-      const lines = ans.toString().split("\n");
-      const shortText = lines.slice(0, 3).join("<br>");
-      const moreText = lines.slice(3).join("<br>");
-      return `<div class="answer">${shortText}${moreText ? `<details><summary>More...</summary>${moreText}</details>` : ""}</div>`;
-    }).join("");
-    html += `<div class="card"><strong>Q:</strong> ${result.question}<br>${answersPreview}</div>`;
-  });
-  if (results.length > 5) {
-    html += `<button onclick="this.nextElementSibling.style.display='block';this.remove()">Show More</button>`;
-    html += `<div style="display:none">${results.slice(5).map(r=>`<div class='card'><strong>Q:</strong> ${r.question}</div>`).join("")}</div>`;
-  }
-  return html;
+function highlight(text, query) {
+  const regex = new RegExp(`(${query})`, "gi");
+  return text.replace(regex, '<mark>$1</mark>');
 }
 
-async function search(query) {
+function renderGroupedResults(query, directMatches, fuzzyMatches, contextualMatches) {
+  const container = document.getElementById("general-results");
+  container.innerHTML = "";
+
+  function createSection(title, matches, groupId) {
+    if (!matches.length) return "";
+
+    const initial = matches.slice(0, 5);
+    const hidden = matches.slice(5);
+
+    let html = `<h3>${title}</h3>`;
+    html += initial.map((m,i) => `
+      <div class="card">
+        <strong>Q:</strong> ${highlight(m.question, query)}<br>${m.answers.join(" ")}
+        <br><button class="ask-ai-btn" data-q="${encodeURIComponent(m.question)}">💬 Ask AI about this</button>
+      </div>`).join("");
+
+    if (hidden.length > 0) {
+      html += `<div id="hidden-${groupId}" style="display:none;">` +
+        hidden.map((m,i) => `
+          <div class="card">
+            <strong>Q:</strong> ${highlight(m.question, query)}<br>${m.answers.join(" ")}
+            <br><button class="ask-ai-btn" data-q="${encodeURIComponent(m.question)}">💬 Ask AI about this</button>
+          </div>`).join("") + 
+        `</div>
+        <button class="show-more-btn" data-target="hidden-${groupId}">Show more...</button>`;
+    }
+
+    return html;
+  }
+
+  container.innerHTML += createSection("🔹 Direct Matches", directMatches, "direct");
+  container.innerHTML += createSection("🔸 Fuzzy Matches", fuzzyMatches, "fuzzy");
+  container.innerHTML += createSection("🤖 Contextual Matches", contextualMatches, "context");
+
+  // Bind Ask AI buttons
+  document.querySelectorAll(".ask-ai-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const q = decodeURIComponent(btn.dataset.q);
+      const selected = data.find(item => item.question === q);
+      if (selected) {
+        addMessage("user", "💬 Ask AI about this result → " + selected.question);
+        const aiResponse = await callGPTWithContext(selected.question, [selected]);
+        addMessage("assistant", aiResponse);
+      }
+    });
+  });
+
+  // Bind Show More buttons
+  document.querySelectorAll(".show-more-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const targetId = btn.dataset.target;
+      const hiddenSection = document.getElementById(targetId);
+      if (hiddenSection) {
+        hiddenSection.style.display = "block";
+        btn.style.display = "none";
+      }
+    });
+  });
+}
+
+async function generalSearch(query) {
   if (query.length < 4) {
-    resultsContainer.innerHTML = "";
+    document.getElementById("general-results").innerHTML = "";
     return;
   }
 
-  console.log("🔍 Searching for:", query);
+  const directMatches = data.filter(item => item.question.toLowerCase().includes(query.toLowerCase()));
+  const fuzzyMatches = fuse.search(query).map(r => r.item).filter(i => !directMatches.includes(i));
 
-  const directMatches = data.filter(item => item.question.toLowerCase().includes(query.toLowerCase()))
-    .map(item => ({ ...item, score: 1 }));
-  const fuzzyMatches = fuse.search(query).map(r => ({ ...r.item, score: 0.6 }));
-
+  let contextualMatches = [];
   const queryEmbedding = await embedQuery(query);
-  const contextualMatches = queryEmbedding
-    ? data.map(item => ({ ...item, score: cosineSimilarity(queryEmbedding, item.embedding) }))
-        .filter(r => r.score > 0.3)
-        .sort((a,b)=>b.score-a.score)
-    : [];
+  if (queryEmbedding) {
+    contextualMatches = data.map(item => ({
+      ...item,
+      _sim: cosineSimilarity(queryEmbedding, item.embedding)
+    }))
+    .filter(r => r._sim > 0.3 && !directMatches.includes(r) && !fuzzyMatches.includes(r))
+    .sort((a,b) => b._sim - a._sim)
+    .slice(0, 20);
+  }
 
-  resultsContainer.innerHTML =
-    renderGroup("Direct Matches", directMatches, query) +
-    renderGroup("Fuzzy Matches", fuzzyMatches, query) +
-    renderGroup("AI Contextual Matches", contextualMatches, query);
+  renderGroupedResults(query, directMatches, fuzzyMatches, contextualMatches);
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  loadData();
-  if (searchBox) {
-    searchBox.addEventListener("input", e => search(e.target.value.trim()));
-    console.log("✅ Search listener attached");
-  }
-});
+function addMessage(role, text) {
+  const msg = document.createElement("div");
+  msg.className = `msg ${role}`;
+  msg.innerHTML = text.replace(/\n/g, "<br>");
+  document.getElementById("chat-history").appendChild(msg);
+  document.getElementById("chat-history").scrollTop = document.getElementById("chat-history").scrollHeight;
+}
 
-// ==================== AI CHATBOT SECTION ====================
-async function askAIChat(query) {
+async function callGPTWithContext(query, matches) {
   try {
-    // Take top 10 matches for context
-    const direct = data.filter(item => item.question.toLowerCase().includes(query.toLowerCase())).slice(0,5);
-    const fuzzy = fuse.search(query).map(r=>r.item).slice(0,5);
-    const combined = [...direct,...fuzzy];
-    const context = combined.map(q=>`Q: ${q.question}\nA: ${q.answers.join(" ")}`).join("\n\n");
-
     const res = await fetch("/.netlify/functions/proxy", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "gpt-4o",
         messages: [
-          { role: "system", content: "You are a helpful assistant answering questions strictly based on the provided RFP Q&A context. If unsure, say 'I couldn't find a relevant answer'."},
-          { role: "user", content: `Context:\n${context}\n\nUser question:\n${query}\n\nAnswer concisely and cite relevant Q&A if possible.` }
+          { role: "system", content: "You are an assistant that answers questions using the provided RFP dataset. If relevant, also include 2-3 useful links from the internet at the end of your answer." },
+          { role: "user", content: `User query: ${query}\nRelevant dataset entries:\n${JSON.stringify(matches, null, 2)}\nProvide the most accurate answer and append helpful web links.` }
         ]
       })
     });
     const json = await res.json();
-    return json.choices?.[0]?.message?.content || "⚠️ No AI response available.";
+    return json.choices?.[0]?.message?.content || "⚠️ AI returned no response.";
   } catch (err) {
-    console.error("AI chat error:", err);
-    return "⚠️ AI chat failed.";
+    return "⚠️ AI unavailable (network/API error).";
   }
 }
 
-function addMessage(sender,text){
-  const msgBox=document.getElementById("chat-messages");
-  msgBox.innerHTML += `<div><b>${sender}:</b> ${text}</div>`;
-  msgBox.scrollTop=msgBox.scrollHeight;
+async function handleChatQuery() {
+  const query = document.getElementById("chat-input").value.trim();
+  if (!query) return;
+  addMessage("user", query);
+  document.getElementById("chat-input").value = "";
+
+  // Search matches
+  let matches = data.filter(item => item.question.toLowerCase().includes(query.toLowerCase()));
+  if (matches.length < 1) matches = fuse.search(query).map(r => r.item);
+
+  if (matches.length < 1) {
+    const queryEmbedding = await embedQuery(query);
+    if (queryEmbedding) {
+      matches = data.map(item => ({
+        ...item,
+        _sim: cosineSimilarity(queryEmbedding, item.embedding)
+      }))
+      .sort((a,b) => b._sim - a._sim)
+      .slice(0, 3);
+    }
+  }
+
+  if (matches.length < 1 && data.length > 0) {
+    matches = [data[0]];
+  }
+
+  const aiResponse = await callGPTWithContext(query, matches);
+  addMessage("assistant", aiResponse);
 }
 
-async function handleChatQuery(){
-  const input=document.getElementById("chat-input");
-  const query=input.value.trim();
-  if(!query) return;
-  addMessage("🧑 You", query);
-  input.value="";
-  const reply=await askAIChat(query);
-  addMessage("🤖 AI", reply);
-}
-
-document.addEventListener("DOMContentLoaded",()=>{
-  const btn=document.getElementById("send-btn");
-  if(btn) btn.addEventListener("click",handleChatQuery);
-  const chatInput=document.getElementById("chat-input");
-  if(chatInput) chatInput.addEventListener("keypress",e=>{if(e.key==="Enter")handleChatQuery();});
+document.addEventListener("DOMContentLoaded", () => {
+  loadData();
+  const searchBox = document.getElementById("general-search");
+  if (searchBox) searchBox.addEventListener("input", e => generalSearch(e.target.value.trim()));
+  const sendBtn = document.getElementById("send-btn");
+  if (sendBtn) sendBtn.addEventListener("click", handleChatQuery);
+  const chatInput = document.getElementById("chat-input");
+  if (chatInput) chatInput.addEventListener("keypress", e => { if (e.key === "Enter") handleChatQuery(); });
 });
