@@ -3,7 +3,7 @@ let fuse;
 
 async function loadData() {
   try {
-    const res = await fetch('rfp_data_with_local_embeddings.json');
+    const res = await fetch('rfp_data_with_local_embeddings.json?t=1753920684');
     data = await res.json();
     console.log(`✅ Loaded ${data.length} records`);
     fuse = new Fuse(data, { includeScore: true, threshold: 0.4, keys: ["question"] });
