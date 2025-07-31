@@ -83,13 +83,20 @@ async function search(query) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  console.log("🔗 Attaching search listener...");
   loadData();
-  if (searchBox) {
-    searchBox.addEventListener("input", e => search(e.target.value.trim()));
+  const searchBox = document.getElementById("general-search");
+  const resultsContainer = document.getElementById("results");
+  if (searchBox && resultsContainer) {
+    searchBox.addEventListener("input", e => {
+      const query = e.target.value.trim();
+      if(query.length>=4) search(query);
+    });
     console.log("✅ Search listener attached");
+  } else {
+    console.error("❌ Search box or results container missing");
   }
 });
-
 // ==================== AI CHATBOT SECTION ====================
 async function askAIChat(query) {
   try {
@@ -135,9 +142,18 @@ async function handleChatQuery(){
   addMessage("🤖 AI", reply);
 }
 
-document.addEventListener("DOMContentLoaded",()=>{
-  const btn=document.getElementById("send-btn");
-  if(btn) btn.addEventListener("click",handleChatQuery);
-  const chatInput=document.getElementById("chat-input");
-  if(chatInput) chatInput.addEventListener("keypress",e=>{if(e.key==="Enter")handleChatQuery();});
-});
+document.addEventListener("DOMContentLoaded", () => {
+  console.log("🔗 Attaching search listener...");
+  loadData();
+  const searchBox = document.getElementById("general-search");
+  const resultsContainer = document.getElementById("results");
+  if (searchBox && resultsContainer) {
+    searchBox.addEventListener("input", e => {
+      const query = e.target.value.trim();
+      if(query.length>=4) search(query);
+    });
+    console.log("✅ Search listener attached");
+  } else {
+    console.error("❌ Search box or results container missing");
+  }
+});});
