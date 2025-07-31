@@ -3,7 +3,7 @@ let fuse;
 
 async function loadData() {
   try {
-    const res = await fetch('https://populationhealthsolutions-my.sharepoint.com/:u:/g/personal/alex_democskonyi_uprisehealth_com/EXAMPLELINK?download=1');
+    const res = await fetch('rfp_data_with_local_embeddings.json');
     data = await res.json();
     console.log(`✅ Loaded ${data.length} records`);
     fuse = new Fuse(data, { includeScore: true, threshold: 0.4, keys: ["question"] });
