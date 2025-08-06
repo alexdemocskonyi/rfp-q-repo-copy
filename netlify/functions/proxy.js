@@ -1,10 +1,9 @@
 // netlify/functions/proxy.js
 const { Configuration, OpenAIApi } = require("openai");
-
-const configuration = new Configuration({
+const config = new Configuration({
   apiKey: process.env.OPENAI_API_KEY,
 });
-const openai = new OpenAIApi(configuration);
+const openai = new OpenAIApi(config);
 
 exports.handler = async (event) => {
   try {
@@ -19,7 +18,7 @@ exports.handler = async (event) => {
     };
   } catch (err) {
     return {
-      statusCode: err.status || 500,
+      statusCode: 500,
       body: JSON.stringify({ error: err.message }),
     };
   }
