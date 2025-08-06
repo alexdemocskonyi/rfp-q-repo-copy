@@ -1,25 +1,18 @@
-// netlify/functions/proxy.js
-const { Configuration, OpenAIApi } = require("openai");
-const config = new Configuration({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-const openai = new OpenAIApi(config);
-
-exports.handler = async (event) => {
+const fetch = require("node-fetch");
+exports.handler = async ({ body }) => {
   try {
-    const { model, messages } = JSON.parse(event.body);
-    const response = await openai.createChatCompletion({
-      model: model || "gpt-4o",
-      messages,
+    const { model, messages } = JSON.parse(body);
+    const res = await fetch("https://api.openai.com/v1/chat/completions", {
+      method:"POST",
+      headers:{
+        "Content-Type":"application/json",
+        "Authorization":`Bearer ${process.env.OPENAI_API_KEY}`
+      },
+      body: JSON.stringify({ model, messages })
     });
-    return {
-      statusCode: 200,
-      body: JSON.stringify(response.data),
-    };
-  } catch (err) {
-    return {
-      statusCode: 500,
-      body: JSON.stringify({ error: err.message }),
-    };
+    const text = await res.text();
+    return { statusCode: res.status, body: text };
+  } catch(err) {
+    return { statusCode: 500, body: JSON.stringify({ error: err.message }) };
   }
 };

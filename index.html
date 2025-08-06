@@ -1,25 +1,33 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8">
-  <title>RFP Search & AI Q&A</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>RFP Q&A Search & Chat</title>
+  <style>
+    body { font-family: sans-serif; margin: 2rem; }
+    #results .card, .bucket-list .card { border: 1px solid #ddd; padding: .5rem; margin: .5rem 0; border-radius: 4px; }
+    .bucket-list { display: grid; grid-template-columns: repeat(auto-fill,minmax(200px,1fr)); gap: .5rem; }
+    button { margin-top: .5rem; }
+    #chatbot-response { margin-top: 1rem; padding: .5rem; border: 1px solid #ddd; border-radius: 4px; min-height: 3rem; }
+  </style>
 </head>
 <body>
-  <section>
-    <h2>Search RFPs</h2>
-    <input id="search-box" placeholder="Type to search…" />
-    <button id="search-button">Search</button>
-    <div id="results"></div>
-  </section>
+  <h1>RFP Q&A</h1>
 
-  <section>
-      <input id="chat-input" placeholder="Ask AI a question…" />
-      <button id="chat-button">Ask AI</button>
-      <div id="chatbot-response"></div>
-  </section>
+  <h2>Search Database</h2>
+  <input id="search-box" placeholder="Type at least 3 characters…" />
+  <button id="search-button">Search</button>
+  <div id="results"></div>
 
-  <script src="https://cdn.jsdelivr.net/npm/fuse.js@6.6.2"></script>
+  <hr/>
+
+  <h2>Ask AI a question</h2>
+  <input id="chat-input" placeholder="Ask me anything…" />
+  <button id="chat-button">Ask AI</button>
+  <div id="chatbot-response">…</div>
+
+  <script src="https://cdn.jsdelivr.net/npm/fuse.js@6"></script>
   <script src="script.js"></script>
 </body>
 </html>
-<--break-system-packages rebuild trigger Wed Aug  6 15:28:57 CDT 2025 -->

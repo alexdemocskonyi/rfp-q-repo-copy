@@ -1,6 +1,5 @@
 functionsDirectory = "/Users/alex.democskonyi/Downloads/rfp_search_app_bundle_copy/netlify/functions"
 functionsDirectoryOrigin = "config-v1"
-plugins = []
 headers = []
 redirects = []
 
@@ -26,4 +25,9 @@ functions = "/Users/alex.democskonyi/Downloads/rfp_search_app_bundle_copy/netlif
 [functions]
 
 [functions."*"]
-node_bundler = "esbuild"
+
+[[plugins]]
+origin = "config"
+package = "@netlify/plugin-functions-install-core"
+
+[plugins.inputs]
