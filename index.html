@@ -1,54 +1,25 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <title>RFP Question Search</title>
-    <script src="https://cdn.jsdelivr.net/npm/fuse.js/dist/fuse.min.js"></script>
-    <script defer src="script.js"></script>
-    <style>
-      body {
-        font-family: Arial, sans-serif;
-        max-width: 800px;
-        margin: 2rem auto;
-        padding: 1rem;
-      }
-      input,
-      button,
-      textarea {
-        padding: 0.5rem;
-        margin: 0.5rem 0;
-        width: 100%;
-      }
-      .result {
-        margin: 1rem 0;
-        border-bottom: 1px solid #ccc;
-      }
-      .question {
-        font-weight: bold;
-      }
-    </style>
-  </head>
-  <body>
-    <h1>RFP Question Search</h1>
-
-    <!-- 🔍 General search -->
-    <input id="search-box" type="text" placeholder="Search questions..." />
+<head>
+  <meta charset="utf-8">
+  <title>RFP Search & AI Q&A</title>
+</head>
+<body>
+  <section>
+    <h2>Search RFPs</h2>
+    <input id="search-box" placeholder="Type a question..." />
     <button id="search-button">Search</button>
     <div id="results"></div>
+  </section>
 
-    <hr />
-
-    <!-- 🤖 AI Chat -->
+  <section>
     <h2>Ask AI a question</h2>
-    <form id="chat-form">
-      <input
-        id="chat-box"
-        type="text"
-        placeholder="Ask a question..."
-        required
-      />
-      <button type="submit">Ask</button>
-    </form>
-    <p id="chatbot-response"></p>
-  </body>
+    <input id="chat-input" placeholder="Ask something…" />
+    <button id="chat-button">Ask</button>
+    <div id="chatbot-response"></div>
+  </section>
+
+  <script src="https://cdn.jsdelivr.net/npm/fuse.js@6.6.2"></script>
+  <script src="script.js"></script>
+</body>
 </html>

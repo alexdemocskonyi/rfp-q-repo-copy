@@ -1,7 +1,7 @@
+# netlify.toml
 [build]
-publish = "./"
-functions = "netlify/functions"
+  publish   = "."
+  functions = "netlify/functions"
 
 [functions]
-node_bundler = "esbuild"
-
+  node_bundler = "esbuild"
