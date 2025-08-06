@@ -3,3 +3,9 @@
   publish   = "."
   functions = "netlify/functions"
 # redeploy Wed Aug  6 16:46:20 CDT 2025
+
+[[plugins]]
+package = "@netlify/plugin-functions-install-core"
+
+[[plugins]]
+package = "@netlify/plugin-functions-install-core"
