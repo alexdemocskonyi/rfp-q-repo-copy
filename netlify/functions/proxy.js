@@ -1,4 +1,4 @@
-// netlify/functions/embed.js
+// netlify/functions/proxy.js
 const { Configuration, OpenAIApi } = require("openai");
 
 const configuration = new Configuration({
@@ -8,10 +8,10 @@ const openai = new OpenAIApi(configuration);
 
 exports.handler = async (event) => {
   try {
-    const { input, model } = JSON.parse(event.body);
-    const response = await openai.createEmbedding({
-      model: model || "text-embedding-3-small",
-      input,
+    const { model, messages } = JSON.parse(event.body);
+    const response = await openai.createChatCompletion({
+      model: model || "gpt-4o",
+      messages,
     });
     return {
       statusCode: 200,
