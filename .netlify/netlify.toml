@@ -26,3 +26,4 @@ functions = "/Users/alex.democskonyi/Downloads/rfp_search_app_bundle_copy/netlif
 [functions]
 
 [functions."*"]
+node_bundler = "esbuild"
