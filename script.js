@@ -395,3 +395,174 @@ Use the CONTEXT to answer precisely. If context is weak or empty, you may still 
   const cin=document.querySelector('#chat-input'); if(cin) cin.addEventListener('keydown',e=>{ if(e.key==='Enter') window.handleChat() });
   log('chat superpatch active');
 })();
+/* ===== RAG Chat — hardened (no "I don't know", strong fallbacks) ===== */
+(() => {
+  // Treat all these as "weak" answers (note the curly apostrophe ’)
+  const BAD = /\b(i\s*(do\s*not|don[’']?t)\s*know|unknown|not\s*sure|cannot\s*(answer|determine)|no\s*(idea|information))\b/i;
+  const MIN = 28; // too-short = weak
+
+  const weak = (s) => {
+    if (!s) return true;
+    s = String(s).trim();
+    return s.length < MIN || BAD.test(s);
+  };
+
+  // Small cosine helper
+  const cos = (a,b)=>{let d=0,ma=0,mb=0;for(let i=0;i<a.length;i++){d+=a[i]*b[i];ma+=a[i]*a[i];mb+=b[i]*b[i]}return d/Math.sqrt((ma||1)*(mb||1))};
+
+  // Ensure loadData() ran
+  async function ensureData(){
+    try { if (typeof loadData === 'function') await loadData(); } catch {}
+    if (!Array.isArray(window.data)) window.data = window.data || [];
+    return window.data;
+  }
+
+  // Build a strong context: lexical + fuzzy + embedding
+  async function buildContext(q){
+    const data = await ensureData();
+    const fuse = window.fuse;
+
+    const qlc = q.toLowerCase();
+    const lexical = data.filter(d => (d.question||'').toLowerCase().includes(qlc)).slice(0,30);
+    const fuzzy   = fuse ? fuse.search(q, { limit: 30 }).map(r => r.item) : [];
+
+    let emb = [];
+    try {
+      const r = await fetch('/.netlify/functions/embed', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ input:q, model:'text-embedding-3-small' })
+      });
+      const j = await r.json();
+      const qemb = j?.data?.[0]?.embedding;
+      if (qemb) {
+        emb = data
+          .filter(d => Array.isArray(d.embedding))
+          .map(d => ({ item:d, score: cos(qemb, d.embedding) }))
+          .sort((a,b)=> b.score - a.score)
+          .slice(0,30)
+          .map(x=>x.item);
+      }
+    } catch (e) { console.warn('[chat] embed fail', e); }
+
+    // de-dup by normalized question, keep order: lexical → fuzzy → emb
+    const seen = new Set();
+    const all = [...lexical, ...fuzzy, ...emb].filter(it=>{
+      const k = (it.question||'').trim().toLowerCase();
+      if (!k || seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    }).slice(0,20);
+
+    // Compact context (cap ~2k chars)
+    const blocks = all.map((t,i)=>{
+      const a = Array.isArray(t.answers) ? t.answers[0] : (t.answers||'');
+      return `[${i+1}] Q: ${t.question}\nA: ${a}`;
+    });
+    let ctx = ''; for (const b of blocks){ if (ctx.length + b.length > 2000) break; ctx += (ctx?'\n\n':'') + b; }
+
+    console.log('[rag] items:', all.length, 'ctxChars:', ctx.length);
+    return { items: all, ctx };
+  }
+
+  // Best DB-only fallback
+  function bestDbAnswer(q){
+    try {
+      if (window.fuse) {
+        const hit = window.fuse.search(q, { limit:1 })?.[0]?.item;
+        if (hit) return Array.isArray(hit.answers) ? hit.answers[0] : (hit.answers||'');
+      }
+    } catch {}
+    return null;
+  }
+
+  // call OpenAI via your proxy; never let it improvise outside context
+  async function askModel(q, ctx){
+    const sys = [
+      'You are an RFP data assistant.',
+      'Answer ONLY using the CONTEXT below.',
+      'If the answer is not present, reply EXACTLY: NO MATCH.',
+      'Keep to 1–2 sentences. No prefaces or disclaimers.'
+    ].join(' ');
+    const usr = `QUESTION: ${q}\n\nCONTEXT:\n${ctx || '(none)'}`;
+
+    try {
+      const r = await fetch('/.netlify/functions/proxy', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ model:'gpt-4o-mini', messages:[
+          { role:'system', content: sys },
+          { role:'user',   content: usr }
+        ]})
+      });
+      const j = await r.json();
+      return j?.choices?.[0]?.message?.content || '';
+    } catch (e) {
+      console.warn('[chat] proxy error', e);
+      return '';
+    }
+  }
+
+  // FINAL handler override
+  window.handleChat = async function(){
+    const inp = document.querySelector('#chat-input');
+    const out = document.querySelector('#chatbot-response');
+    if (!inp || !out) return console.warn('chat elements missing');
+
+    const q = (inp.value||'').trim();
+    if (!q) { out.textContent = 'Please type a question.'; return; }
+
+    out.textContent = '…thinking…';
+
+    try {
+      const { items, ctx } = await buildContext(q);
+      let ans = await askModel(q, ctx);
+
+      // A) Model obeyed "NO MATCH" or gave a weak/IDK answer?
+      if (ans === 'NO MATCH' || weak(ans)) {
+        const fb = bestDbAnswer(q);
+        if (fb) ans = fb;
+      }
+
+      // B) Still weak? Give model ONLY the top answers and ask again.
+      if (weak(ans) && items.length) {
+        const top = items.slice(0,6)
+          .map((it,i)=>`[${i+1}] ${(Array.isArray(it.answers)?it.answers[0]:(it.answers||''))}`)
+          .join('\n');
+        const r = await fetch('/.netlify/functions/proxy', {
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({
+            model:'gpt-4o-mini',
+            messages:[
+              { role:'system', content:'Use ONLY the MATERIAL to answer in 1–2 sentences. If still unknown, reply NO MATCH.' },
+              { role:'user',   content:`MATERIAL:\n${top}\n\nQUESTION: ${q}` }
+            ]
+          })
+        });
+        const j = await r.json();
+        const ans2 = j?.choices?.[0]?.message?.content || '';
+        if (!weak(ans2)) ans = ans2;
+      }
+
+      // C) If the model insists on IDK/short, force best DB or polite fallback
+      if (weak(ans)) {
+        const fb = bestDbAnswer(q);
+        ans = fb || 'No exact answer in the dataset.';
+      }
+
+      out.textContent = ans;
+    } catch (e) {
+      console.warn('[chat] fatal', e);
+      out.textContent = bestDbAnswer(q) || 'AI unavailable right now.';
+    }
+  };
+
+  // Rebind UI
+  const btn = document.querySelector('#chat-button');
+  if (btn) btn.onclick = window.handleChat;
+  const cin = document.querySelector('#chat-input');
+  if (cin) cin.addEventListener('keydown', e => { if (e.key === 'Enter') window.handleChat(); });
+
+  console.log('[chat] hardened override active');
+})();
