@@ -566,3 +566,62 @@ Use the CONTEXT to answer precisely. If context is weak or empty, you may still 
 
   console.log('[chat] hardened override active');
 })();
+/* === IDK killer wrapper: always fall back to best DB answer === */
+(() => {
+  const IDK = /\b(i\s*(do\s*not|don[’']?t)\s*know|unknown|not\s*sure|cannot\s*(answer|determine)|no\s*(idea|information))\b/i;
+  const tooShort = s => !s || String(s).trim().length < 28;
+  const isWeak = s => tooShort(s) || IDK.test(String(s));
+
+  async function bestFromDb(q){
+    try {
+      if (typeof loadData === 'function') await loadData();
+      const fuse = window.fuse;
+      const hit = fuse ? fuse.search(q, { limit: 1 })?.[0]?.item : null;
+      const ans = hit && (Array.isArray(hit.answers) ? hit.answers[0] : hit.answers);
+      return ans || null;
+    } catch(e){ console.warn('[idk-wrapper] bestFromDb error', e); return null; }
+  }
+
+  function getInEl(){
+    return document.querySelector('#chat-input')
+        || document.querySelector('input[name="chat"]')
+        || document.querySelector('input[placeholder*="Ask"]');
+  }
+  function getOutEl(){
+    return document.querySelector('#chatbot-response')
+        || document.querySelector('.chat-output')
+        || document.querySelector('#chat-response');
+  }
+  function bind(btn){
+    if (!btn) return;
+    btn.onclick = async () => window.handleChat && window.handleChat();
+  }
+
+  // Wrap whatever handleChat currently is
+  const prev = window.handleChat;
+  window.handleChat = async function(){
+    const inp = getInEl(); const out = getOutEl();
+    const q = (inp?.value || '').trim();
+    if (out) out.textContent = '…thinking…';
+
+    // run original if present
+    if (typeof prev === 'function') { try { await prev(); } catch(e){ console.warn('[idk-wrapper] prev error', e); } }
+
+    // post-process whatever was written
+    const txt = out?.textContent || '';
+    if (isWeak(txt)) {
+      const fb = await bestFromDb(q);
+      out && (out.textContent = fb || 'No exact answer in the dataset.');
+      console.log('[idk-wrapper] replaced weak answer with DB fallback');
+    } else {
+      console.log('[idk-wrapper] strong answer kept');
+    }
+  };
+
+  // Re-bind UI
+  bind(document.querySelector('#chat-button') || document.querySelector('button#ask-ai') || document.querySelector('button'));
+  const cin = getInEl();
+  if (cin) cin.addEventListener('keydown', e => { if (e.key === 'Enter') window.handleChat(); });
+
+  console.log('[idk-wrapper] active');
+})();
