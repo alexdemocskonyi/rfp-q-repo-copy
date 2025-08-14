@@ -362,3 +362,158 @@ window._rfp = { loadData, generalSearch, handleChat };
 
   console.log("[RFP RAG v4] chat override active");
 })();
+/* === Chat: RAG when possible, model-only when not (with DB fallback) === */
+(() => {
+  const CHAT_URL  = "/.netlify/functions/proxy";
+  const EMBED_URL = "/.netlify/functions/embed";
+
+  const IDK = /\b(i\s*(do\s*not|don[’']?t)\s*know|no\s*match|not\s*sure|cannot\s*(answer|determine))\b/i;
+  const tooShort = s => !s || String(s).trim().length < 18;
+  const weak = s => tooShort(s) || IDK.test(String(s||""));
+
+  const firstAnswer = (it) => {
+    if (!it) return null;
+    if (Array.isArray(it.answers)) return it.answers.find(a => a && a.trim()) || null;
+    return it.answers || null;
+  };
+
+  async function ensureData(){
+    if (typeof window.loadData === "function") { try { await window.loadData(); } catch(_){} }
+    const d = Array.isArray(window.data) ? window.data : [];
+    if (!window.fuse && d.length){
+      try {
+        window.fuse = new Fuse(d, { includeScore:true, threshold:0.38, ignoreLocation:true, keys:["question","answers"] });
+      } catch {}
+    }
+    return d;
+  }
+
+  function cosine(a,b){
+    let dot=0,ma=0,mb=0;
+    const n=Math.min(a?.length||0,b?.length||0);
+    for (let i=0;i<n;i++){ const x=a[i], y=b[i]; dot+=x*y; ma+=x*x; mb+=y*y; }
+    const denom = Math.sqrt(ma)*Math.sqrt(mb) || 1;
+    return dot/denom;
+  }
+
+  async function embedQuery(q){
+    try{
+      const r = await fetch(EMBED_URL, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ input:q, model:"text-embedding-3-small" }) });
+      const j = await r.json();
+      return j?.data?.[0]?.embedding || null;
+    }catch{ return null; }
+  }
+
+  function rankLex(q, data){
+    const ql = q.toLowerCase();
+    return data.map(it=>{
+      let s=0;
+      if ((it.question||"").toLowerCase().includes(ql)) s+=1;
+      if ((firstAnswer(it)||"").toLowerCase().includes(ql)) s+=0.5;
+      return { item:it, s };
+    }).filter(x=>x.s>0).sort((a,b)=>b.s-a.s);
+  }
+
+  function rankFuzzy(q){
+    const f = window.fuse;
+    if (!f) return [];
+    return f.search(q).map(r=>({ item:r.item, s:1 - Math.min(1, r.score||1) }));
+  }
+
+  function rankEmbed(qemb, data){
+    if (!qemb) return [];
+    const arr=[];
+    for (const it of data){
+      const e=it.embedding;
+      if (!Array.isArray(e) || e.length!==qemb.length) continue;
+      arr.push({ item:it, s: Math.max(0, cosine(qemb,e)) });
+    }
+    arr.sort((a,b)=>b.s-a.s);
+    return arr;
+  }
+
+  function dedupeKeepBest(items){
+    const seen=new Map();
+    for (const {item,s} of items){
+      const key=item.question || JSON.stringify(item).slice(0,180);
+      if (!seen.has(key) || s>seen.get(key).s) seen.set(key,{item,s});
+    }
+    return [...seen.values()].sort((a,b)=>b.s-a.s);
+  }
+
+  function buildContext(ranked, take=10, maxChars=8000){
+    let out="";
+    for (let i=0;i<ranked.length && i<take;i++){
+      const it=ranked[i].item || ranked[i];
+      const q=it.question||"";
+      const a=firstAnswer(it)||"";
+      const chunk=`Q${i+1}: ${q}\nA${i+1}: ${a}\n\n`;
+      if (out.length+chunk.length>maxChars) break;
+      out+=chunk;
+    }
+    return out;
+  }
+
+  function bestFromDb(q){
+    try{
+      const f = window.fuse;
+      const hit = f ? f.search(q,{limit:1})?.[0]?.item : null;
+      return firstAnswer(hit);
+    }catch{ return null; }
+  }
+
+  window.handleChat = async function(){
+    const inputEl = document.querySelector("#chat-input") || document.querySelector('input[name="chat"]');
+    const outEl   = document.querySelector("#chatbot-response") || document.querySelector(".chat-output") || document.querySelector("#chat-response");
+    const q = (inputEl?.value || "").trim();
+    if (!q){ if(outEl) outEl.textContent="Type a question."; return; }
+    if (outEl) outEl.textContent = "…thinking…";
+
+    const data = await ensureData();
+
+    // Try to build dataset context (RAG)
+    let ctx = "";
+    let pool = [];
+    if (data.length){
+      const lex  = rankLex(q, data);
+      const fuzzy= rankFuzzy(q);
+      const qemb = await embedQuery(q);
+      const emb  = rankEmbed(qemb, data);
+      pool = dedupeKeepBest([...emb, ...fuzzy, ...lex]);
+      ctx = buildContext(pool, 10, 8000);
+    }
+
+    // Ask model – if we have context, force using it; otherwise answer generally
+    let ans="";
+    try{
+      const sys = pool.length
+        ? "You are an RFP assistant. Answer in 1–3 sentences using ONLY the provided context (RFP Q/A pairs). Be precise."
+        : "You are a helpful assistant. Answer directly even without RFP context.";
+      const user = pool.length
+        ? `CONTEXT:\n${ctx}\n\nQUESTION: ${q}\n\nAnswer strictly from the context.`
+        : q;
+
+      const r = await fetch(CHAT_URL, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ model:"gpt-4o-mini", messages:[{role:"system",content:sys},{role:"user",content:user}] })
+      });
+      const j = await r.json();
+      ans = j?.choices?.[0]?.message?.content || "";
+    }catch{ /* ignore, we’ll fallback */ }
+
+    // If the model reply is weak and we DO have a dataset, show best DB answer
+    if (pool.length && weak(ans)){
+      const best = bestFromDb(q);
+      if (best) ans = best;
+    }
+
+    outEl && (outEl.textContent = ans || "Sorry, I couldn’t generate an answer.");
+  };
+
+  const btn = document.querySelector("#chat-button") || document.querySelector("button#ask-ai") || document.querySelector("button.ask-ai");
+  if (btn) btn.onclick = ()=>window.handleChat();
+  const cin = document.querySelector("#chat-input") || document.querySelector('input[name="chat"]');
+  if (cin) cin.addEventListener("keydown", e=>{ if (e.key==="Enter") window.handleChat(); });
+
+  console.log("[chat] RAG+general fallback active");
+})();
