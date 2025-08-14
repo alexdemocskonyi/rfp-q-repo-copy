@@ -517,3 +517,180 @@ window._rfp = { loadData, generalSearch, handleChat };
 
   console.log("[chat] RAG+general fallback active");
 })();
+/* === RAG + General fallback + truthful capability answer === */
+(() => {
+  const CHAT_URL  = "/.netlify/functions/proxy";
+  const EMBED_URL = "/.netlify/functions/embed";
+
+  const IDK = /\b(i\s*(do\s*not|don[’']?t)\s*know|no\s*match|not\s*sure|cannot\s*(answer|determine))\b/i;
+  const tooShort = s => !s || String(s).trim().length < 18;
+  const weak = s => tooShort(s) || IDK.test(String(s||""));
+
+  const setOut = (el, txt) => {
+    if (!el) return;
+    if (el.tagName === "TEXTAREA" || "value" in el) el.value = String(txt);
+    else el.textContent = String(txt);
+  };
+
+  const firstAnswer = (it) => {
+    if (!it) return null;
+    if (Array.isArray(it.answers)) return it.answers.find(a => a && a.trim()) || null;
+    return it.answers || null;
+  };
+
+  async function ensureData(){
+    if (typeof window.loadData === "function") { try { await window.loadData(); } catch(_){} }
+    const d = Array.isArray(window.data) ? window.data : [];
+    if (!window.Fuse && typeof Fuse === "undefined") return d; // Fuse script must already be on page
+    if (!window.fuse && d.length && typeof Fuse !== "undefined"){
+      try {
+        window.fuse = new Fuse(d, { includeScore:true, threshold:0.38, ignoreLocation:true, keys:["question","answers"] });
+      } catch {}
+    }
+    return d;
+  }
+
+  function cosine(a,b){
+    let dot=0,ma=0,mb=0;
+    const n=Math.min(a?.length||0,b?.length||0);
+    for (let i=0;i<n;i++){ const x=a[i], y=b[i]; dot+=x*y; ma+=x*x; mb+=y*y; }
+    const denom = Math.sqrt(ma)*Math.sqrt(mb) || 1;
+    return dot/denom;
+  }
+
+  async function embedQuery(q){
+    try{
+      const r = await fetch(EMBED_URL, { method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({ input:q, model:"text-embedding-3-small" }) });
+      const j = await r.json();
+      return j?.data?.[0]?.embedding || null;
+    }catch{ return null; }
+  }
+
+  function rankLex(q, data){
+    const ql = q.toLowerCase();
+    return data.map(it=>{
+      let s=0;
+      if ((it.question||"").toLowerCase().includes(ql)) s+=1;
+      if ((firstAnswer(it)||"").toLowerCase().includes(ql)) s+=0.5;
+      return { item:it, s };
+    }).filter(x=>x.s>0).sort((a,b)=>b.s-a.s);
+  }
+
+  function rankFuzzy(q){
+    const f = window.fuse;
+    if (!f) return [];
+    return f.search(q).map(r=>({ item:r.item, s:1 - Math.min(1, r.score||1) }));
+  }
+
+  function rankEmbed(qemb, data){
+    if (!qemb) return [];
+    const arr=[];
+    for (const it of data){
+      const e=it.embedding;
+      if (!Array.isArray(e) || e.length!==qemb.length) continue;
+      arr.push({ item:it, s: Math.max(0, cosine(qemb,e)) });
+    }
+    arr.sort((a,b)=>b.s-a.s);
+    return arr;
+  }
+
+  function dedupeKeepBest(items){
+    const seen=new Map();
+    for (const {item,s} of items){
+      const key=item.question || JSON.stringify(item).slice(0,180);
+      if (!seen.has(key) || s>seen.get(key).s) seen.set(key,{item,s});
+    }
+    return [...seen.values()].sort((a,b)=>b.s-a.s);
+  }
+
+  function buildContext(ranked, take=12, maxChars=9000){
+    let out="";
+    for (let i=0;i<ranked.length && i<take;i++){
+      const it=ranked[i].item || ranked[i];
+      const q=it.question||"";
+      const a=firstAnswer(it)||"";
+      const chunk=`Q${i+1}: ${q}\nA${i+1}: ${a}\n\n`;
+      if (out.length+chunk.length>maxChars) break;
+      out+=chunk;
+    }
+    return out;
+  }
+
+  function bestFromDb(q){
+    try{
+      const f = window.fuse;
+      const hit = f ? f.search(q,{limit:1})?.[0]?.item : null;
+      return firstAnswer(hit);
+    }catch{ return null; }
+  }
+
+  function looksLikeDatasetQuestion(q){
+    return /\b(dataset|data\s*set|your\s*data|rfp\s*data|read (the|from) data)\b/i.test(q||"");
+  }
+
+  window.handleChat = async function(){
+    const inputEl = document.querySelector("#chat-input") || document.querySelector('input[name="chat"]');
+    const outEl   = document.querySelector("#chatbot-response") || document.querySelector(".chat-output") || document.querySelector("#chat-response");
+    const btn     = document.querySelector("#chat-button") || document.querySelector("button#ask-ai") || document.querySelector("button.ask-ai");
+    const q = (inputEl?.value || "").trim();
+    if (!q){ setOut(outEl,"Type a question."); return; }
+    setOut(outEl,"…thinking…"); if (btn) btn.disabled=true;
+
+    const data = await ensureData();
+
+    // Build dataset context (if any)
+    let ctx = ""; let pool=[];
+    if (data.length){
+      const lex  = rankLex(q, data);
+      const fuzzy= rankFuzzy(q);
+      const qemb = await embedQuery(q);
+      const emb  = rankEmbed(qemb, data);
+      pool = dedupeKeepBest([...emb, ...fuzzy, ...lex]);
+      ctx = buildContext(pool, 12, 9000);
+    }
+
+    // If the user asks "can you read the dataset?"
+    if (looksLikeDatasetQuestion(q)){
+      if (pool.length){
+        setOut(outEl, `Yes — I’m using the RFP dataset context for this answer (${Math.min(pool.length,12)} matches loaded).`);
+      } else {
+        setOut(outEl, "I can use the RFP dataset when your question matches entries. Try including key terms (e.g., “provider”, “claims”, “scheduling”).");
+      }
+      if (btn) btn.disabled=false;
+      return;
+    }
+
+    // Ask the model
+    let ans="";
+    try{
+      const sys = pool.length
+        ? "You are an RFP assistant. You DO have access to the dataset context shown below. Answer in 1–3 sentences using ONLY that context. Do NOT say you lack access. If missing, reply: No exact answer in the dataset."
+        : "You are a helpful assistant. Answer directly even without dataset context. Do NOT claim you cannot access datasets; instead answer generally.";
+      const user = pool.length ? `CONTEXT:\n${ctx}\n\nQUESTION: ${q}\n\nAnswer strictly from the context.` : q;
+
+      const r = await fetch(CHAT_URL, {
+        method:"POST", headers:{"Content-Type":"application/json"},
+        body: JSON.stringify({ model:"gpt-4o-mini", messages:[{role:"system",content:sys},{role:"user",content:user}] })
+      });
+      const j = await r.json();
+      ans = j?.choices?.[0]?.message?.content || "";
+    }catch{ /* ignore, fallback below */ }
+
+    // Weak answer? show best DB answer if we had any context
+    if (pool.length && weak(ans)){
+      const best = bestFromDb(q);
+      if (best) ans = best;
+    }
+
+    setOut(outEl, ans || "Sorry, I couldn’t generate an answer.");
+    if (btn) btn.disabled=false;
+  };
+
+  // Wire up
+  const btn = document.querySelector("#chat-button") || document.querySelector("button#ask-ai") || document.querySelector("button.ask-ai");
+  if (btn) btn.onclick = ()=>window.handleChat();
+  const cin = document.querySelector("#chat-input") || document.querySelector('input[name="chat"]');
+  if (cin) cin.addEventListener("keydown", e=>{ if (e.key==="Enter") window.handleChat(); });
+
+  console.log("[chat] RAG + general fallback + truthful capability messaging active");
+})();
