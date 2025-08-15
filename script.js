@@ -202,6 +202,8 @@ async function handleChat(){
   }
 
   out.textContent = answer;
+  if(window._rfp&&window._rfp.renderChatSources) window._rfp.renderChatSources(pool);
+
 }
 
 /* ---------- Wire up ---------- */
@@ -624,9 +626,7 @@ window._rfp = { loadData, generalSearch, handleChat };
     }catch{ return null; }
   }
 
-  function looksLikeDatasetQuestion(q){
-    return /\b(dataset|data\s*set|your\s*data|rfp\s*data|read (the|from) data)\b/i.test(q||"");
-  }
+  function looksLikeDatasetQuestion(q){ return /(cans*(yous*)?(read|access|use)s*(thes*)?(datas*set|dataset)|dos*yous*haves*accesss*tos*(thes*)?(dataset|datas*set))/i.test(q||""); }
 
   window.handleChat = async function(){
     const inputEl = document.querySelector("#chat-input") || document.querySelector('input[name="chat"]');
@@ -683,6 +683,8 @@ window._rfp = { loadData, generalSearch, handleChat };
     }
 
     setOut(outEl, ans || "Sorry, I couldn’t generate an answer.");
+  if(window._rfp&&window._rfp.renderChatSources) window._rfp.renderChatSources(pool);
+
     if (btn) btn.disabled=false;
   };
 
@@ -693,4 +695,15 @@ window._rfp = { loadData, generalSearch, handleChat };
   if (cin) cin.addEventListener("keydown", e=>{ if (e.key==="Enter") window.handleChat(); });
 
   console.log("[chat] RAG + general fallback + truthful capability messaging active");
+})();
+/* --- render sources under chat --- */
+(function(){
+  const ensureBox=()=>{let b=document.querySelector('#chat-sources'); if(!b){b=document.createElement('div'); b.id='chat-sources'; b.style.cssText='margin-top:6px;font-size:13px;color:#444'; const out=document.querySelector('#chatbot-response')||document.querySelector('.chat-output')||document.querySelector('#chat-response'); if(out&&out.parentNode) out.parentNode.appendChild(b);} return b; };
+  window._rfp=window._rfp||{};
+  window._rfp.renderChatSources=function(pool){
+    const box=ensureBox(); if(!box) return;
+    if(!Array.isArray(pool)||!pool.length){ box.textContent=''; return; }
+    const top=pool.slice(0,3).map((x,i)=>{const it=x.item||x; const q=it.question||''; const a=(Array.isArray(it.answers)?it.answers[0]:it.answers)||''; return `<details><summary>Source ${i+1}: ${q}</summary><div style="padding:6px 10px;border-left:2px solid #ddd;margin:4px 0 8px">${a}</div></details>`;}).join('');
+    box.innerHTML = `<div style="margin-top:4px">Sources used for this answer:</div>` + top;
+  };
 })();
